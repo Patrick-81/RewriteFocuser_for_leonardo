@@ -1,0 +1,625 @@
+/*
+   Parser des commandes en provenance du port série
+*/
+#include "parser.h"
+#include <Arduino.h>
+#include <stdlib.h>
+#include <EEPROMex.h>
+
+
+
+
+
+#define __DEBUG1__ true
+#if __DEBUG1__
+    #define PRINT Serial.println
+#else
+    #define PRINT Serial.print
+#endif
+
+
+
+#define __DEBUG2__ true
+#if __DEBUG2__
+  #define PRINTDBG echo
+#else
+  #define PRINTDBG //
+
+#endif
+
+
+
+bool debug = false;
+int TempCoefficientRaw = 1;
+int TempCoefficient = 1;
+int MaxSteps = 0;
+bool MoonliteMode = false;
+#define MAXCOMMAND  8
+char    cmd[MAXCOMMAND];
+char    parm[MAXCOMMAND];
+char    packet[MAXCOMMAND];
+char    outWire[MAXCOMMAND];
+char    tempString[32];
+//static uint16_t waitvalue[5]= {1580, 1053, 702, 468, 312};
+static uint16_t waitvalue[5]= {4096, 2048, 1024, 512, 256};
+long hexstr2long(char *line);
+
+AbsoluteDriver *driver = NULL;
+long currentPos = 0;
+long targetPos = 0;
+long previousPos = 0;
+long togo = 0;
+int direction = FORWARD;
+int stepMode = 0;
+int speedNumber = 1;
+int back = 0;
+bool moving = false;
+int backlash = 0;
+int wait = waitvalue[0];
+///////////////////////////
+// Communications
+///////////////////////////
+boolean ArduHandle = false;
+bool wireRequest = false;
+int I2C_ClearBus();
+void requestEvent();
+void receiveEvent(int howmany);
+bool streamlock = false;
+
+// EEProm read/write
+int addressCurrentPos;
+const int memBase          = 350;
+
+#define RELEASED    false
+#define LOCK        true
+
+
+long int vparm = 0;
+bool    interrupt = true;
+
+
+extern const byte interruptPIN;
+
+// déclaration de fonctions
+//long hexstr2long(char *line);
+//void process_data (const char * input);
+
+void echo(const char* cmd, int parm)
+{
+    char s[32];
+    sprintf(s,"%s:%u",cmd,parm);
+    Serial.println(s);
+}
+
+void move()
+{
+  if (!interrupt)
+  {
+    if (togo > 0)
+    {
+      driver->move(direction, wait);
+      currentPos += direction;
+      togo--;
+      PRINTDBG("t>", togo);
+      PRINTDBG("c>", currentPos);
+    }
+    else
+    {
+      interrupt = true;
+      previousPos = currentPos;
+    }
+  }
+  else
+  {
+    if(digitalRead(INWARD) == LOW)
+    {
+      if (currentPos > 0)
+      {
+        interrupt = false;
+        direction = -1;
+        togo = 1;
+        wait = waitvalue[0];
+      }
+    }
+    else if(digitalRead(OUTWARD) == LOW)
+    {
+      interrupt = false;
+      direction = +1;
+      togo = 1;
+      wait = waitvalue[0];
+    }
+  }  
+}
+
+void stop()
+{
+    interrupt = true;
+}
+
+// void inithandpad()
+// {
+//     if (__DEBUG1__)
+//     {
+//         Serial.print("streamlock = ");
+//         Serial.println(streamlock);
+//     }
+//     if (!streamlock)
+//     {
+//         // check arduino handpad
+//         // Teste si le focuser communique avec un autre Raquette arduino
+//         /*
+//         Wire.begin(I2CPORT);        // joindre le bus i2c (adresse est optionnelle pour un maître)
+//         Wire.onRequest(requestEvent);
+//         Wire.onReceive(receiveEvent);
+//         driver->setSpeedProfile(BasicStepperDriver::CONSTANT_SPEED);
+        
+//         PRINT("test");
+//         Wire.begin(I2CPORT);
+//         ArduHandle = true;
+//         Wire.onRequest(requestEvent);
+//         Wire.onReceive(receiveEvent);
+//         driver->setSpeedProfile(BasicStepperDriver::CONSTANT_SPEED);
+//         */
+//                //Testconnection I2C avec module de contrôle moteur
+//         int rtn = I2C_ClearBus(); // clear the I2C bus first before calling Wire.begin()
+//         if (rtn != 0) {
+//           Serial.println(F("I2C bus error. Could not clear"));
+//           if (rtn == 1) {
+//             Serial.println(F("SCL clock line held low"));
+//           } else if (rtn == 2) {
+//             Serial.println(F("SCL clock line held low by slave clock stretch"));
+//           } else if (rtn == 3) {
+//             Serial.println(F("SDA data line held low"));
+//           }
+//         } else { // bus clear
+//           // re-enable Wire
+//           // now can start Wire Arduino master
+//           Serial.println("setup finished");
+//         }   
+//         Wire.beginTransmission(I2CPORT); // transmit to device #8
+//         byte error  = Wire.endTransmission();    // stop transmitting
+//         if (__DEBUG1__)
+//         {
+//           Serial.print("apres test transmission erreur : ");
+//           Serial.println(error);
+//         }
+//         if (error == 0)
+//         {
+//             if (__DEBUG1__)
+//             {
+//                 Serial.print("Intelligent handset on port ==> ");
+//                 Serial.print(I2CPORT);
+//                 Serial.println("  !");
+//             }
+//             ArduHandle = true;
+//             // joindre le bus i2c (adresse est optionnelle pour un maître)
+//             Wire.begin(I2CPORT);
+//             // déclarer les fonctions de communication
+//             Wire.onRequest(requestEvent);
+//             Wire.onReceive(receiveEvent);
+//             driver->setSpeedProfile(BasicStepperDriver::CONSTANT_SPEED);
+//         }
+//         else
+//         {
+//             if (__DEBUG1__)
+//             {
+//                 Serial.print("No I2C device found at address ");
+//                 Serial.println(I2CPORT);
+//             }
+//         }
+
+    
+//     }
+// }
+
+void storePos() // save pos if it has changed or each minute
+{
+  if (currentPos != previousPos)
+  {
+    EEPROM.writeLong(addressCurrentPos,currentPos);
+  }
+}
+
+
+void initialize(int initPos)
+{
+    Serial.begin(SERIAL_SPEED);
+    while(!Serial);
+    driver = new AbsoluteDriver(STEPS_REV, DRIVER_DIR, DRIVER_STEP);//, DRIVER_EN, M0, M1, M2);
+    driver->setSpeedProfile(BasicStepperDriver::LINEAR_SPEED, MOTOR_ACCEL, MOTOR_ACCEL);
+    currentPos      = initPos;
+    targetPos       = initPos;
+    previousPos     = initPos;
+    direction       = FORWARD;
+    togo            = 0;
+    stepMode        = 0;
+    // Set microstep mode
+    pinMode(INWARD, INPUT_PULLUP);
+    pinMode(OUTWARD, INPUT_PULLUP);
+    
+    // pinMode(M0, OUTPUT);
+    // pinMode(M1, OUTPUT);
+    // pinMode(M2, OUTPUT);
+    // digitalWrite(M0, LOW);
+    // digitalWrite(M1, LOW);
+    // digitalWrite(M2, HIGH);
+    EEPROM.setMemPool(memBase, EEPROMSizeUno);
+    addressCurrentPos      = EEPROM.getAddress(sizeof(long));
+    currentPos = EEPROM.readLong(addressCurrentPos);
+}
+
+
+void process_data (const char * input)
+{
+    if (__DEBUG1__)
+    {
+        Serial.print("commande : ");
+        Serial.println(input);
+    }
+    memset(tempString,'\0',sizeof(tempString));
+
+    //parse de la commande
+    int len = strlen(input);
+    if (len == 1)
+    {
+        cmd[0] = input[0];
+        cmd[1] = '\0';
+    }
+    else
+    {
+        if (len > 2)
+        {
+            memset(parm,0,MAXCOMMAND);
+            strncpy(parm, input + 2, len - 2);
+            vparm =  hexstr2long(parm);
+        }
+        cmd[0] = input[0];
+        cmd[1] = input[1];
+        cmd[2] = '\0';
+    }
+ 
+  // for now just display it
+  // (but you could compare it to some value, convert to an integer, etc.)
+  //Serial.print (cmd);  // end of process_data
+      // toggle debug on/off
+
+    if (!strcasecmp(cmd, "D"))
+    {
+        debug = !debug;
+        if(debug)
+        {
+            Serial.println("Debug enabled");
+        }
+    }
+
+    if (!strcasecmp(cmd, "GP"))
+    {
+        sprintf(tempString, "%lX#", currentPos);
+        if (wireRequest) strcpy(outWire, tempString);
+        if (__DEBUG1__) Serial.println(currentPos);
+        PRINT(tempString);
+        //PRINT("#");
+     }
+
+    if (!strcasecmp(cmd, "GC")) {
+        sprintf(tempString, "%02X#", TempCoefficientRaw);
+        PRINT(tempString);
+//        PRINT("#");
+    }
+
+    if (!strcasecmp(cmd, "GV")) {
+        PRINT("10#");
+    }
+
+    if (!strcasecmp(cmd, "GH"))
+    {
+        sprintf(tempString,"%02X", stepMode);
+        PRINT(tempString);
+        PRINT('#');
+    }
+
+        // get temperature
+    if (!strcasecmp(cmd, "GT")) {
+    /*
+      // Skip temperature reading when motor is running
+      if (stepper.isMoving()) {
+        if (TempSensor_Present)
+          TempSensor_Reading = DHT_getTemperature();
+      }
+
+      // reset temp sensor read timer.
+      millisLastTempSensorRead = millis();
+
+      //char tempString[6];
+      if (MoonliteMode)
+        // compatability mode, 0.5 degeee resolution
+        sprintf(tempString, "%04X", (int)(TempSensor_Reading/0.5));
+      // else 0.125 degree resolution
+      else sprintf(tempString, "%04X", (int)(TempSensor_Reading/0.125));
+      PRINT(tempString);
+      PRINT("#");
+    */
+        sprintf(tempString, "%02X", 20);
+        PRINT(tempString);
+        PRINT("#");
+    }
+    
+    // retourner nouvelle position
+    if (!strcasecmp(cmd, "GN")) {
+        sprintf(tempString, "%lX#", targetPos);
+        if (wireRequest) strcpy(outWire, tempString);
+        PRINT(tempString);
+//        PRINT("#");
+    }
+
+    // Le focuser se déplace - 01 se déplace, 00 sinon
+    if (!strcasecmp(cmd, "GI")) {
+      if (!interrupt) {
+        PRINT("01#");
+        if (ArduHandle) Wire.write("01#");
+      }
+      else {
+        PRINT("00#");
+        if (ArduHandle) Wire.write("00#");
+      }
+    }
+
+    // retourne la vitesse du moteur, seules valeurs possible 02, 04, 08, 10, 20, définies par la commande SD
+    if (!strcasecmp(cmd, "GD")) {
+        sprintf(tempString, "%02X#", 2<<(speedNumber-1));
+        PRINT(tempString);
+    }
+
+    // Version du firmware "10"
+    if (!strcasecmp(cmd, "GV")) {
+      PRINT("10#");
+    }
+
+        //Coefficient de temperature
+    if (!strcasecmp(cmd, "SC")) {
+      TempCoefficientRaw = vparm;
+      // covert signed 8-bit to signed int
+      if ((TempCoefficientRaw & 0x80)) {// negtive
+        TempCoefficient = TempCoefficientRaw - 256;
+      }
+      else {
+        TempCoefficient = TempCoefficientRaw;
+      }
+    }
+
+    // full step mode
+    if (!strcasecmp(cmd, "SF")) {
+        stepMode = 0;
+    }
+
+    // half step mode
+    if (!strcasecmp(cmd, "SH")) {
+        stepMode = 1;
+    }
+
+    // mode de compatibilité
+    if (!strcasecmp(cmd, "YM")) {
+      MoonliteMode = false;
+    }
+
+    if (!strcasecmp(cmd, "FQ")) {
+        interrupt = true;
+        stop();
+    }
+
+
+    if (!strcasecmp(cmd, "FG")) {
+        interrupt = false;
+     }
+
+
+    // Commandes envoyées par la raquette
+    if (!strcasecmp(cmd, "FI")) // move inward
+    {
+      PRINT(cmd);
+    }
+    if (!strcasecmp(cmd, "FO")) // move forward
+    {
+      PRINT(cmd);
+    }
+
+
+
+
+
+
+    // fixer la vitess, seules valeurs acceptables 02, 04, 08, 10, 20
+    if (!strcasecmp(cmd, "SD"))
+    {
+        speedNumber = log(vparm)/log(2);
+        wait = waitvalue[speedNumber-1];
+    }
+
+    // initialiser la position
+    if (!strcasecmp(cmd, "SP")) {
+        currentPos = vparm;
+        EEPROM.writeLong(addressCurrentPos,currentPos);
+    }
+
+    // fixer la nouvelle position
+    if (!strcasecmp(cmd, "SN"))
+    {
+        targetPos = vparm;
+        togo = abs(targetPos - currentPos);
+        if (targetPos > currentPos) 
+            direction = +1; //FORWARD
+        else
+            direction = -1; //INWARD
+        wait = waitvalue[speedNumber-1];
+        PRINTDBG("Dans setNewPos togo = ", togo);
+        PRINTDBG("targetPos = ", targetPos);
+        PRINTDBG("currentPos = ", currentPos);
+        PRINTDBG("direction = ", direction);
+    }
+
+    // enable TempComp
+    if (!strcasecmp (cmd, "Y+"))
+    {
+    /*  TempCompEn = true;
+
+      // Latch current position and average temperature.
+      TempCompOriginalTemperature = TempSensor_Average;
+      TempCompOriginalPosition = stepper.currentPosition();
+
+      TempCompLastTemperature = TempSensor_Average;
+      TempCompTargetPosition = TempCompOriginalPosition;
+    */}
+
+        // disable TempComp, currently not used
+    if (!strcasecmp (cmd, "Y-")) {
+      //TempCompEn = false;
+    }
+
+    if (!strcasecmp(cmd, "Z+")) {
+    /*  if (TempCompEn) {
+        PRINT("01#");
+      }
+      else {
+        PRINT("00#");
+      }
+    */
+    }
+
+    // home the motor, hard-coded, ignore parameters since we only have one motor
+    if (!strcasecmp(cmd, "PH")) {
+      targetPos = 8000;
+      interrupt = false;
+    }
+
+    // set backlash
+    if (!strcasecmp(cmd, "YB")) {
+      backlash = vparm;
+    }
+
+    // get backlash set by YB
+    if (!strcasecmp(cmd, "ZB")) {
+      //char tempString[6];
+      sprintf(tempString, "%02X", backlash);
+      PRINT(tempString);
+      PRINT("#");
+    }
+
+    // set TempComp threshold in unit of 0.25 degree
+    if (!strcasecmp(cmd, "YT")) {
+    /*
+      TempCompThresholdRaw = hexstr2long(param);
+      TempCompThreshold = (float)TempCompThresholdRaw / 4; // covert to degree
+    */
+    }
+
+    // get TempComp threshold set by YT
+    if (!strcasecmp(cmd, "ZT")) {
+    /*
+      //char tempString[6];
+      sprintf(tempString, "%02X", TempCompThresholdRaw);
+      PRINT(tempString);
+      PRINT("#");
+    */
+    }
+
+    if (!strcasecmp(cmd, "YX")) {
+    
+      MaxSteps = vparm;
+    
+    }
+
+    if (!strcasecmp(cmd, "ZX")) {
+      //char tempString[6];
+      sprintf(tempString, "%04X", MaxSteps);
+      PRINT(tempString);
+      PRINT("#");
+    }
+
+    if (!strcasecmp(cmd, "ZA")) {
+    /*
+      int TempInt;
+      TempInt = (int)(TempSensor_Average * 100);
+      if (TempInt >= 0) {
+        TempInt = TempInt & 0xFFFF;
+      }
+      else { // convert to 2's complement
+        TempInt = ~abs(TempInt) & 0xFFFF;
+      }
+
+      //char tempString[6];
+      sprintf(tempString, "%04X", TempInt);
+      PRINT(tempString);
+      PRINT("#");
+    */
+    }
+
+    // Debug Info
+//    if (!strcasecmp(cmd, "SS"))
+//      if(debug) outputDebugInfo();
+
+
+
+
+}
+
+long hexstr2long(char *line) {
+  long ret = 0;
+
+  ret = strtol(line, NULL, 16);
+  return (ret);
+}
+
+void processIncomingByte (const byte inByte)
+{
+  static char input_line [MAXCOMMAND];
+  static unsigned int input_pos = 0;
+
+  streamlock = LOCK;
+
+  switch (inByte)
+  {
+  case ':':
+      input_pos = 0;
+      break;
+  case '#':   // end of text
+      input_line [input_pos] = 0;  // terminating null byte
+      // terminator reached! process input_line here ...
+      process_data (input_line);
+      streamlock = RELEASED;
+      // reset buffer for next time
+      //input_pos = 0;  
+      break;
+  case '\r':   // discard carriage return
+      break;
+  case '\n':   // discard carriage return
+      break;
+  default:
+      // keep adding if not full ... allow for terminating null byte
+      if (input_pos < (MAXCOMMAND - 1))
+        input_line [input_pos++] = inByte;
+      break;
+  }  // end of switch
+   
+} // end of processIncomingByte  
+
+///////////////////////////////// BEGIN INPUT///////////////////////////////////
+// answer to a request from I2C
+void requestEvent()
+{
+  if (wireRequest) Wire.write(outWire);
+  wireRequest = false;
+}
+// get input from I2C
+void receiveEvent(int howmany)
+{
+    if (streamlock) return;
+    wireRequest = true;
+    char c = '\0';
+    while (Wire.available())
+    {
+        if (__DEBUG1__) Serial.println(c);
+        c = Wire.read();
+        processIncomingByte (c);
+    }
+}
+
