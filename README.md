@@ -15,10 +15,10 @@
 * Ouvrez VSCode dans lequel vous avez installé l'extension platformIO
 * clonez le répertoire Github and un répertoire de votre choix : git clone https://github.com/Patrick-81/RewriteFocuser_for_leonardo
 * Entrez dans le repertoire RewriteFocuser_for_leonardo ou master_RewriteFocuser_for_leonardo
-* Windows: double cliquez sur le fihier platformio.ini ==> le projet devrait se charge dans l'extension platformio de VSCode
+* Windows: double cliquez sur le fihier platformio.ini ==> le projet devrait se charger dans l'extension platformio de VSCode
 * Linux : à partir de VSCode chargez le répertoire (Open Folder). Répondre par la négative à la question posée par la fenêtre popup.
 * Linux & windows : 
 	* compilez le code en cliquant sur la coche en bas à gauche de la page
-	* Branchez votre arduino au port USB du PC, vérifiez le port USB sur lequel vous êtes connectés, si nécessaire modifiez la définition du port dans upload_port de p latformio.ini
+	* Branchez votre arduino au port USB du PC, vérifiez le port USB sur lequel vous êtes connectés, si nécessaire modifiez la définition du port dans upload_port dans le fichier platformio.ini
 	* téléversez le firmware vers l'arduino en utilsant la flèche "->" en bas à gauche de l'écran.
 ## c'est fini...
