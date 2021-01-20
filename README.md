@@ -20,7 +20,7 @@ Compilation du firmware
 * Windows: double cliquez sur le fihier platformio.ini ==> le projet devrait se charge dans l'extension platformio de VSCode
 * Linux : à partir de VSCode chargez le répertoire (Open Folder). Répondre par la négative à la question posée par la fenêtre popup.
 * Linux & windows : 
-** compilez le code zn cliquant sur la coche en bas à gauche de la page
-** Branchez votre arduino au port USB du PC, vérifiez le port USB sur lequel vous êtes connectés, si nécessaire modifiez la définition du port dans upload_port de platformio.ini
-** téléversez le firmware vers l'arduino en utilsant la flèche "->" en bas à gauche de l'écran.
-** c'est fini...
+  ** compilez le code zn cliquant sur la coche en bas à gauche de la page
+  ** Branchez votre arduino au port USB du PC, vérifiez le port USB sur lequel vous êtes connectés, si nécessaire modifiez la définition du port dans upload_port de platformio.ini
+  ** téléversez le firmware vers l'arduino en utilsant la flèche "->" en bas à gauche de l'écran.
+  ** c'est fini...
